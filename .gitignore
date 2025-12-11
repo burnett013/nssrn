@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+nursing.db
+2022_NSSRN_PUF_ASCII_Package/
+.venv/
+env/
