@@ -81,28 +81,52 @@ def get_burnout_stats(state: Optional[str] = None):
     return df.to_dict(orient="records")
 
 @app.get("/satisfaction")
-def get_satisfaction_stats(state: Optional[str] = None):
+def get_satisfaction_stats(state: Optional[str] = None, breakdown_by_gender: bool = False):
+    logger.info(f"get_satisfaction_stats called with state={state}, breakdown_by_gender={breakdown_by_gender}")
     # Variable: PN_SATISFD
     where_clause = "WHERE 1=1"
     if state:
         where_clause += f" AND STATE_PUF = '{state}'"
+    
+    # If breaking down by gender, include SEX in query
+    if breakdown_by_gender:
+        query = f"""
+            SELECT 
+                PN_SATISFD as category,
+                SEX as gender,
+                SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
+            FROM nssrn
+            {where_clause}
+            GROUP BY PN_SATISFD, SEX
+        """
+        df = get_data(query)
+        df = df.dropna(subset=['category', 'gender'])
         
-    query = f"""
-        SELECT 
-            PN_SATISFD as category,
-            SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
-        FROM nssrn
-        {where_clause}
-        GROUP BY PN_SATISFD
-    """
-    df = get_data(query)
-    df = df.dropna(subset=['category'])
-    
-    total = df['weighted_count'].sum()
-    if total > 0:
-        df['percentage'] = (df['weighted_count'] / total) * 100
-    
-    return df.to_dict(orient="records")
+        # Calculate percentage within each gender
+        # First get totals per gender
+        gender_totals = df.groupby('gender')['weighted_count'].transform('sum')
+        df['percentage'] = (df['weighted_count'] / gender_totals) * 100
+        
+        return df.to_dict(orient="records")
+    else:
+        query = f"""
+            SELECT 
+                PN_SATISFD as category,
+                SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
+            FROM nssrn
+            {where_clause}
+            GROUP BY PN_SATISFD
+        """
+        df = get_data(query)
+        df = df.dropna(subset=['category'])
+        
+        total = df['weighted_count'].sum()
+        if total > 0:
+            df['percentage'] = (df['weighted_count'] / total) * 100
+        else:
+            df['percentage'] = 0
+            
+        return df.to_dict(orient="records")
 
 @app.get("/earnings")
 def get_earnings_stats(state: Optional[str] = None, grouping: str = "PN_EMPSIT"):
@@ -148,6 +172,98 @@ def get_telehealth_stats(state: Optional[str] = None):
     total = df['weighted_count'].sum()
     if total > 0:
         df['percentage'] = (df['weighted_count'] / total) * 100
+    
+    return df.to_dict(orient="records")
+
+@app.get("/telehealth/by_nurse_type")
+def get_telehealth_by_nurse_type(state: Optional[str] = None):
+    """Breakdown of telehealth usage among those who USE telehealth (PN_TELHLTH=1) by RN vs NP"""
+    where_clause = "WHERE PN_TELHLTH = 1"  # Only those using telehealth
+    if state:
+        where_clause += f" AND STATE_PUF = '{state}'"
+        
+    query = f"""
+        SELECT 
+            APN_NP as nurse_type,
+            SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
+        FROM nssrn
+        {where_clause}
+        GROUP BY APN_NP
+    """
+    df = get_data(query)
+    df = df.dropna(subset=['nurse_type'])
+    
+    total = df['weighted_count'].sum()
+    if total > 0:
+        df['percentage'] = (df['weighted_count'] / total) * 100
+    
+    return df.to_dict(orient="records")
+
+@app.get("/telehealth/by_gender")
+def get_telehealth_by_gender(state: Optional[str] = None):
+    """Breakdown of telehealth usage among those who USE telehealth (PN_TELHLTH=1) by gender"""
+    where_clause = "WHERE PN_TELHLTH = 1"  # Only those using telehealth
+    if state:
+        where_clause += f" AND STATE_PUF = '{state}'"
+        
+    query = f"""
+        SELECT 
+            SEX as gender,
+            SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
+        FROM nssrn
+        {where_clause}
+        GROUP BY SEX
+    """
+    df = get_data(query)
+    df = df.dropna(subset=['gender'])
+    
+    total = df['weighted_count'].sum()
+    if total > 0:
+        df['percentage'] = (df['weighted_count'] / total) * 100
+    
+    return df.to_dict(orient="records")
+
+@app.get("/satisfaction/by_state")
+def get_satisfaction_by_state():
+    """Get satisfaction percentages for each state, focusing on Extremely Satisfied and Extremely Dissatisfied"""
+    query = """
+        SELECT 
+            STATE_PUF as state,
+            PN_SATISFD as satisfaction_level,
+            SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
+        FROM nssrn
+        WHERE STATE_PUF IS NOT NULL AND PN_SATISFD IS NOT NULL
+        GROUP BY STATE_PUF, PN_SATISFD
+    """
+    df = get_data(query)
+    
+    # Calculate percentage within each state
+    state_totals = df.groupby('state')['weighted_count'].transform('sum')
+    df['percentage'] = (df['weighted_count'] / state_totals) * 100
+    
+    return df.to_dict(orient="records")
+
+@app.get("/satisfaction/by_rural_urban")
+def get_satisfaction_by_rural_urban(state: Optional[str] = None):
+    """Get satisfaction by rural/urban classification for a specific state or all states"""
+    where_clause = "WHERE RN_RURAL IS NOT NULL AND PN_SATISFD IS NOT NULL"
+    if state:
+        where_clause += f" AND STATE_PUF = '{state}'"
+    
+    query = f"""
+        SELECT 
+            RN_RURAL as area_type,
+            PN_SATISFD as satisfaction_level,
+            SUM(CAST(RKRNWGTA AS REAL)) as weighted_count
+        FROM nssrn
+        {where_clause}
+        GROUP BY RN_RURAL, PN_SATISFD
+    """
+    df = get_data(query)
+    
+    # Calculate percentage within each area type
+    area_totals = df.groupby('area_type')['weighted_count'].transform('sum')
+    df['percentage'] = (df['weighted_count'] / area_totals) * 100
     
     return df.to_dict(orient="records")
 
